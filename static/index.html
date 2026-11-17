@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ds-port · DeepSeek 会话搬运</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --panel-2: #23272f;
+    --line: #2e333d;
+    --text: #d9dee6;
+    --dim: #8b94a3;
+    --accent: #5b9dff;
+    --ok: #3ecf8e;
+    --warn: #e8b44a;
+    --err: #ef6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 20px 28px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    max-width: 1180px; margin-inline: auto;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; font-weight: 600; letter-spacing: .3px; }
+  .sub { color: var(--dim); font-size: 12.5px; margin-bottom: 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px; margin-bottom: 14px;
+  }
+  textarea, input[type=text], select {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 11px; font: inherit; outline: none;
+  }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  #links { min-height: 88px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .field { flex: 1 1 150px; min-width: 130px; }
+  .field label { display: block; color: var(--dim); font-size: 11.5px; margin-bottom: 4px; letter-spacing: .4px; }
+  .checks { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; color: var(--dim); font-size: 12.5px; }
+  .checks label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  button {
+    background: var(--accent); color: #08101d; border: 0; border-radius: 8px;
+    padding: 10px 20px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--line); font-weight: 400; padding: 6px 12px;
+  }
+  .status { margin-left: 12px; font-size: 12.5px; color: var(--dim); }
+  .status.err { color: var(--err); }
+  .status.ok { color: var(--ok); }
+  #result { display: none; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab {
+    padding: 6px 14px; border-radius: 7px; cursor: pointer;
+    color: var(--dim); border: 1px solid transparent; font-size: 13px;
+  }
+  .tab.active { background: var(--panel-2); color: var(--text); border-color: var(--line); }
+  .pane { display: none; }
+  .pane.active { display: block; }
+  #promptOut { min-height: 340px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.65; }
+  .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .count { color: var(--dim); font-size: 12.5px; margin-left: auto; }
+  #rawOut {
+    max-height: 420px; overflow: auto; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    font-size: 12.8px; white-space: pre-wrap; word-break: break-word;
+  }
+  #rawOut .u { color: #7fb3ff; }
+  #rawOut .a { color: #b8c4d4; }
+  #rawOut .t { color: var(--dim); font-style: italic; }
+  #statsOut { font-size: 13px; }
+  #statsOut table { border-collapse: collapse; width: 100%; }
+  #statsOut td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  #statsOut td:first-child { color: var(--dim); width: 140px; white-space: nowrap; }
+  .warn { color: var(--warn); font-size: 12.5px; margin-top: 8px; }
+  footer { color: var(--dim); font-size: 11.5px; text-align: center; margin-top: 18px; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>ds-port · DeepSeek 会话搬运</h1>
+<div class="sub">粘贴一条（或多条）分享链接，生成一段提示词，粘到新会话里就能接着原来的语气聊下去。</div>
+
+<div class="card">
+  <textarea id="links" placeholder="https://chat.deepseek.com/share/xxxxxxxxxxxx&#10;可以贴多条，前后有别的文字也没关系"></textarea>
+  <div class="row">
+    <div class="field">
+      <label>提示词预算</label>
+      <select id="budget">
+        <option value="8000">8000 字</option>
+        <option value="16000" selected>16000 字</option>
+        <option value="30000">30000 字</option>
+        <option value="0">不限</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>逐字保留最近</label>
+      <select id="recent">
+        <option value="6">6 轮</option>
+        <option value="12" selected>12 轮</option>
+        <option value="24">24 轮</option>
+        <option value="40">40 轮</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>语气样本</label>
+      <select id="samples">
+        <option value="0">0 条</option>
+        <option value="2">2 条</option>
+        <option value="3" selected>3 条</option>
+        <option value="5">5 条</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>角色名（留空自动）</label>
+      <input type="text" id="char" placeholder="自动识别">
+    </div>
+    <div class="field">
+      <label>我的名字（留空自动）</label>
+      <input type="text" id="user" placeholder="自动识别">
+    </div>
+  </div>
+  <div class="row">
+    <div class="field" style="flex:1 1 100%">
+      <label>这一轮往哪走（可留空）</label>
+      <input type="text" id="direction" placeholder="比如：让她主动一次 / 时间跳到第二天早上">
+    </div>
+  </div>
+  <div class="checks">
+    <label><input type="checkbox" id="merge" checked> 多链接合并</label>
+    <label><input type="checkbox" id="think" checked> 带内心独白样本</label>
+    <label><input type="checkbox" id="refresh"> 忽略缓存</label>
+  </div>
+  <div class="row" style="align-items:center;margin-top:14px">
+    <button id="go">读取并生成</button>
+    <span class="status" id="status">待命</span>
+  </div>
+</div>
+
+<div class="card" id="result">
+  <div class="tabs">
+    <div class="tab active" data-pane="prompt">提示词</div>
+    <div class="tab" data-pane="raw">原文</div>
+    <div class="tab" data-pane="stats">统计</div>
+  </div>
+
+  <div class="pane active" id="pane-prompt">
+    <textarea id="promptOut" spellcheck="false"></textarea>
+    <div class="bar">
+      <button class="ghost" id="copy">复制</button>
+      <span class="count" id="count">0 字</span>
+    </div>
+    <div class="warn" id="warnings"></div>
+  </div>
+
+  <div class="pane" id="pane-raw">
+    <div id="rawOut"></div>
+  </div>
+
+  <div class="pane" id="pane-stats">
+    <div id="statsOut"></div>
+  </div>
+</div>
+
+<footer>
+  只读公开分享接口，不登录、不写入、不带 cookie。抓到的原文缓存在本机 <code>cache/</code>，24 小时过期。
+</footer>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  let lastMessages = [];
+
+  // ---------- tab 切换 ----------
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.pane').forEach((p) => p.classList.remove('active'));
+      tab.classList.add('active');
+      $('pane-' + tab.dataset.pane).classList.add('active');
+    });
+  });
+
+  function setStatus(text, kind) {
+    const el = $('status');
+    el.textContent = text;
+    el.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  async function post(path, body) {
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return resp.json();
+  }
+
+  // 多份分享合并：按首条时间排序，接缝处的相邻重复去掉
+  function mergeShares(shares) {
+    const sorted = shares.slice().sort(
+      (a, b) => (a.messages[0]?.inserted_at || 0) - (b.messages[0]?.inserted_at || 0)
+    );
+    const out = [];
+    const warnings = [];
+    for (const sh of sorted) {
+      let ms = sh.messages;
+      if (out.length && ms.length) {
+        const tail = out[out.length - 1];
+        const head = ms[0];
+        const same = tail.role === head.role &&
+          (tail.request || tail.response) === (head.request || head.response);
+        if (same) ms = ms.slice(1);
+        if (out.length && ms.length && out[out.length - 1].role === 'USER' && ms[0].role === 'USER') {
+          warnings.push('接缝处出现连续两段「我」的发言，可能不是同一条时间线。');
+        }
+      }
+      out.push(...ms);
+    }
+    return { messages: out, warnings };
+  }
+
+  $('go').addEventListener('click', async () => {
+    const text = $('links').value.trim();
+    if (!text) { setStatus('先把链接粘进来', 'err'); return; }
+
+    $('go').disabled = true;
+    setStatus('抓取中…');
+    try {
+      const fetched = await post('/api/fetch', {
+        text,
+        refresh: $('refresh').checked,
+      });
+      if (!fetched.ok) {
+        setStatus(fetched.error || '抓取失败', 'err');
+        return;
+      }
+
+      const shares = fetched.shares;
+      let messages, mergeWarnings = [];
+      if ($('merge').checked) {
+        const merged = mergeShares(shares);
+        messages = merged.messages;
+        mergeWarnings = merged.warnings;
+      } else {
+        messages = shares[0].messages;
+      }
+      lastMessages = messages;
+
+      const fromCache = shares.filter((s) => s.from_cache).length;
+      setStatus('生成中…（' + shares.length + ' 份，' +
+        (fromCache === shares.length ? '全部来自缓存' : (shares.length - fromCache) + ' 份新抓') + '）');
+
+      const built = await post('/api/build', {
+        messages,
+        opts: {
+          budget: Number($('budget').value),
+          recent: Number($('recent').value),
+          samples: Number($('samples').value),
+          char: $('char').value.trim(),
+          user: $('user').value.trim(),
+          direction: $('direction').value.trim(),
+          think: $('think').checked,
+        },
+      });
+
+      if (!built.ok) { setStatus(built.error || '生成失败', 'err'); return; }
+
+      render(built.result, mergeWarnings, fetched.errors || []);
+      setStatus('好了', 'ok');
+    } catch (e) {
+      setStatus('出错：' + e.message, 'err');
+    } finally {
+      $('go').disabled = false;
+    }
+  });
+
+  function render(res, mergeWarnings, fetchErrors) {
+    $('result').style.display = 'block';
+    $('promptOut').value = res.prompt;
+    updateCount();
+
+    // 原文预览
+    const raw = $('rawOut');
+    raw.textContent = '';
+    lastMessages.forEach((m) => {
+      const who = m.role === 'USER' ? '我' : (res.names.char || '角色');
+      const text = m.request || m.response || '';
+      const line = document.createElement('div');
+      const tag = document.createElement('span');
+      tag.className = m.role === 'USER' ? 'u' : 'a';
+      tag.textContent = who + '：';
+      line.appendChild(tag);
+      line.appendChild(document.createTextNode(text));
+      raw.appendChild(line);
+      if (m.think) {
+        const th = document.createElement('div');
+        th.className = 't';
+        th.textContent = '（思考：' + m.think + '）';
+        raw.appendChild(th);
+      }
+    });
+
+    // 统计
+    const st = res.stats;
+    const rows = [
+      ['轮数', st.rounds],
+      ['原文总字数', st.total_chars],
+      ['时间跨度', res.timeline_count + ' 条时间线 / 最近 ' + res.recent + ' 轮逐字'],
+      ['角色回复字数', st.assistant_min + '–' + st.assistant_max + '（中位 ' + st.assistant_median + '）'],
+      ['我的回复字数', '中位 ' + st.user_median],
+      ['括号动作占比', (st.bracket_ratio * 100).toFixed(0) + '%'],
+      ['引号台词占比', (st.quote_ratio * 100).toFixed(0) + '%'],
+      ['状态标记', (st.mark_keys || []).map((k) => k + '：' + (st.mark_current[k] || '')).join('、') || '无'],
+      ['高频片段', (st.idioms || []).join('、') || '无'],
+      ['动作起手词', (st.starters || []).join('、') || '无'],
+      ['提示词长度', res.chars + ' 字（预算 ' + (res.budget || '不限') + '）'],
+      ['削减记录', (res.trimmed || []).join('；') || '没有削减'],
+    ];
+    const table = document.createElement('table');
+    rows.forEach(([k, v]) => {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      td1.textContent = k;
+      const td2 = document.createElement('td');
+      td2.textContent = String(v);
+      tr.appendChild(td1); tr.appendChild(td2);
+      table.appendChild(tr);
+    });
+    $('statsOut').textContent = '';
+    $('statsOut').appendChild(table);
+
+    const warns = [...mergeWarnings, ...(res.warnings || []), ...fetchErrors.map((e) => e[0] + '：' + e[1])];
+    $('warnings').textContent = warns.length ? '⚠ ' + warns.join(' / ') : '';
+
+    // 默认回到提示词页
+    document.querySelector('.tab[data-pane="prompt"]').click();
+  }
+
+  function updateCount() {
+    $('count').textContent = $('promptOut').value.length + ' 字';
+  }
+  $('promptOut').addEventListener('input', updateCount);
+
+  $('copy').addEventListener('click', async () => {
+    const text = $('promptOut').value;
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus('已复制到剪贴板', 'ok');
+    } catch (e) {
+      $('promptOut').select();
+      document.execCommand('copy');
+      setStatus('已复制（兼容模式）', 'ok');
+    }
+  });
+})();
+</script>
+</body>
+</html>
