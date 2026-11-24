@@ -62,18 +62,18 @@ def _cache_path(share_id):
 
 
 def _read_cache(share_id, use_cache=True):
+    """读出缓存，返回 (raw, 年龄秒)。不判断新鲜度——过不过期由调用方决定。"""
     if not use_cache:
-        return None
+        return None, None
     path = _cache_path(share_id)
     if not os.path.isfile(path):
-        return None
+        return None, None
     try:
-        if time.time() - os.path.getmtime(path) > CACHE_TTL:
-            return None
+        age = time.time() - os.path.getmtime(path)
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            return json.load(f), age
     except (OSError, ValueError):
-        return None
+        return None, None
 
 
 def _write_cache(share_id, raw):
@@ -125,19 +125,13 @@ def _request_once(share_id, timeout):
     return raw
 
 
-def fetch_share(share_id, use_cache=True, timeout=20):
-    """抓一条分享，返回原始 JSON dict。优先走缓存。"""
-    cached = _read_cache(share_id, use_cache)
-    if cached is not None:
-        cached["_from_cache"] = True
-        return cached
-
+def _fetch_with_retry(share_id, timeout):
+    """429 / 5xx 退避重试。"""
     delay = 1.5
     last = None
     for _ in range(3):
         try:
-            raw = _request_once(share_id, timeout)
-            break
+            return _request_once(share_id, timeout)
         except FetchError as e:
             last = e
             msg = str(e)
@@ -146,11 +140,48 @@ def fetch_share(share_id, use_cache=True, timeout=20):
                 delay *= 2
                 continue
             raise
-    else:
-        raise last or FetchError("抓取失败。")
+    raise last or FetchError("抓取失败。")
+
+
+def _strip_flags(raw):
+    """缓存文件里不写运行期标记。"""
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+
+def fetch_share(share_id, use_cache=True, timeout=20, allow_stale=True):
+    """抓一条分享，返回原始 JSON dict。
+
+    缓存策略：
+      * 有新缓存（24 小时内）→ 直接用
+      * 没有 / 过期 → 请求接口
+      * 请求失败但有旧缓存，且 allow_stale → **回退到旧缓存**并标记 _stale
+
+    后者是为了限流期间能用：宁可拿到几天前的数据，也别什么都拿不到。
+    """
+    cached, age = _read_cache(share_id, use_cache)
+
+    if cached is not None and age <= CACHE_TTL:
+        cached["_from_cache"] = True
+        cached["_stale"] = False
+        return cached
+
+    try:
+        raw = _fetch_with_retry(share_id, timeout)
+    except FetchError as e:
+        if allow_stale and cached is not None:
+            cached["_from_cache"] = True
+            cached["_stale"] = True
+            cached["_stale_reason"] = str(e)
+            cached["_stale_hours"] = int(age // 3600)
+            return cached
+        raise
 
     raw["_from_cache"] = False
-    _write_cache(share_id, raw)
+    raw["_stale"] = False
+    # 失效/私密的分享不写缓存：万一作者只是临时关掉，下次还能再试一次
+    data = raw.get("data") or {}
+    if data.get("biz_code", 0) in (0, None):
+        _write_cache(share_id, _strip_flags(raw))
     return raw
 
 
@@ -204,19 +235,25 @@ def normalize(raw):
     return out
 
 
-def fetch_many(share_ids, use_cache=True):
+def fetch_many(share_ids, use_cache=True, allow_stale=True):
     """逐个抓。单个失败不拖垮整批。
 
     返回 (ok_list, errors)：
-      ok_list: [(share_id, messages, from_cache)]
+      ok_list: [{id, messages, from_cache, stale, note, hours}]
       errors:  [(share_id, 错误文案)]
     """
     ok, errors = [], []
     for sid in share_ids:
         try:
-            raw = fetch_share(sid, use_cache=use_cache)
-            msgs = normalize(raw)
-            ok.append((sid, msgs, bool(raw.get("_from_cache"))))
+            raw = fetch_share(sid, use_cache=use_cache, allow_stale=allow_stale)
+            ok.append({
+                "id": sid,
+                "messages": normalize(raw),
+                "from_cache": bool(raw.get("_from_cache")),
+                "stale": bool(raw.get("_stale")),
+                "note": raw.get("_stale_reason") or "",
+                "hours": raw.get("_stale_hours") or 0,
+            })
         except FetchError as e:
             errors.append((sid, str(e)))
     return ok, errors

@@ -127,16 +127,13 @@ class Handler(BaseHTTPRequestHandler):
                              "error": "没认出链接。形如 https://chat.deepseek.com/share/xxxx"})
             return
 
-        ok, errors = fetcher.fetch_many(ids, use_cache=not refresh)
+        ok, errors = fetcher.fetch_many(ids, use_cache=not refresh, allow_stale=True)
         if not ok:
             self._send(200, {"ok": False, "shares": [], "errors": errors,
                              "error": errors[0][1] if errors else "抓取失败"})
             return
 
-        shares = []
-        for sid, msgs, from_cache in ok:
-            shares.append({"id": sid, "messages": msgs, "from_cache": from_cache})
-        self._send(200, {"ok": True, "shares": shares, "errors": errors})
+        self._send(200, {"ok": True, "shares": ok, "errors": errors})
 
     def _handle_build(self, payload):
         messages = payload.get("messages") or []
@@ -162,6 +159,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    no_browser = "--no-browser" in argv or os.environ.get("DS_PORT_NO_BROWSER") == "1"
+
     port = PREFERRED_PORT
     for cand in (PREFERRED_PORT, 8890, 8891, 8892):
         try:
@@ -174,8 +174,19 @@ def main(argv=None):
         print("8899 及备用端口都被占用了，先关掉占用的程序再试。")
         return 1
 
-    print("ds-port 已启动： http://127.0.0.1:%d" % port)
+    url = "http://127.0.0.1:%d" % port
+    print("ds-port 已启动： %s" % url)
     print("按 Ctrl+C 停止。")
+    if port != PREFERRED_PORT:
+        print("（%d 端口被占用，已自动换到 %d）" % (PREFERRED_PORT, port))
+
+    if not no_browser:
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception:
+            pass
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

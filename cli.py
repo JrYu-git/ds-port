@@ -59,6 +59,8 @@ def main():
     ap.add_argument("--char", default="", help="角色名（留空自动识别）")
     ap.add_argument("--user", default="", help="我的名字（留空自动识别）")
     ap.add_argument("--refresh", action="store_true", help="忽略缓存，强制重新抓")
+    ap.add_argument("--no-stale", action="store_true",
+                    help="抓不到时不要回退到过期缓存（默认会回退）")
     args = ap.parse_args()
 
     ids = fetcher.extract_ids(args.links)
@@ -66,18 +68,24 @@ def main():
         print("没认出链接。形如 https://chat.deepseek.com/share/xxxx", file=sys.stderr)
         return 2
 
-    ok, errors = fetcher.fetch_many(ids, use_cache=not args.refresh)
+    ok, errors = fetcher.fetch_many(ids, use_cache=not args.refresh,
+                                    allow_stale=not args.no_stale)
     for sid, msg in errors:
         print("[跳过] %s：%s" % (sid, msg), file=sys.stderr)
     if not ok:
         return 1
 
+    for item in ok:
+        if item["stale"]:
+            print("[旧缓存] %s：接口没拿到（%s），用的是 %d 小时前的缓存。"
+                  % (item["id"], item["note"], item["hours"]), file=sys.stderr)
+
     warnings = []
     if args.merge and len(ok) > 1:
-        messages, warnings = merge_messages([msgs for _sid, msgs, _c in ok])
+        messages, warnings = merge_messages([item["messages"] for item in ok])
     else:
         # 不合并时只用第一份
-        messages = ok[0][1]
+        messages = ok[0]["messages"]
 
     try:
         res = builder.build(

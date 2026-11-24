@@ -150,6 +150,51 @@ def main():
     check("能生成", r["chars"] > 0)
     check("没有空节", all(t for t in r["sections"]))
 
+    print("\n[10] 限流时回退到过期缓存")
+    import os
+    import shutil
+    import tempfile
+    import time
+
+    old_dir = fetcher.CACHE_DIR
+    tmp_dir = tempfile.mkdtemp(prefix="dsport-test-")
+    fetcher.CACHE_DIR = tmp_dir
+    old_req = fetcher._request_once
+    try:
+        payload = synth_payload(2)
+        fetcher._write_cache("testid123", payload)
+        path = fetcher._cache_path("testid123")
+        stale_at = time.time() - 40 * 3600          # 40 小时前，已过期
+        os.utime(path, (stale_at, stale_at))
+
+        def boom(*a, **k):
+            raise fetcher.FetchError("网络连不上：测试用")
+
+        fetcher._request_once = boom
+
+        raw = fetcher.fetch_share("testid123", use_cache=True, allow_stale=True)
+        check("回退成功", raw.get("_stale") is True, str(raw.get("_stale")))
+        check("标记来自缓存", raw.get("_from_cache") is True)
+        check("带上原因", bool(raw.get("_stale_reason")), str(raw.get("_stale_reason")))
+        check("旧缓存能解析", len(fetcher.normalize(raw)) == 4)
+
+        try:
+            fetcher.fetch_share("testid123", use_cache=True, allow_stale=False)
+            check("关掉兜底时应报错", False)
+        except fetcher.FetchError:
+            check("关掉兜底时应报错", True)
+
+        check("没有旧缓存时不静默成功", True)
+        try:
+            fetcher.fetch_share("nope000", use_cache=True, allow_stale=True)
+            check("无缓存时应报错", False)
+        except fetcher.FetchError:
+            check("无缓存时应报错", True)
+    finally:
+        fetcher._request_once = old_req
+        fetcher.CACHE_DIR = old_dir
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("\n" + ("全部通过" if not FAILS else "失败 %d 项: %s" % (len(FAILS), ", ".join(FAILS))))
     return 0 if not FAILS else 1
 

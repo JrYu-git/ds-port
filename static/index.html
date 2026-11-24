@@ -54,6 +54,7 @@
   .status { margin-left: 12px; font-size: 12.5px; color: var(--dim); }
   .status.err { color: var(--err); }
   .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
   #result { display: none; }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
   .tab {
@@ -255,8 +256,14 @@
       lastMessages = messages;
 
       const fromCache = shares.filter((s) => s.from_cache).length;
+      const staleWarnings = shares.filter((s) => s.stale).map(
+        (s) => '「' + s.id + '」接口没拿到（' + (s.note || '请求失败') +
+               '），用的是 ' + (s.hours || 0) + ' 小时前的缓存'
+      );
       setStatus('生成中…（' + shares.length + ' 份，' +
-        (fromCache === shares.length ? '全部来自缓存' : (shares.length - fromCache) + ' 份新抓') + '）');
+        (staleWarnings.length
+          ? '有 ' + staleWarnings.length + ' 份用的是旧缓存'
+          : (fromCache === shares.length ? '全部来自缓存' : (shares.length - fromCache) + ' 份新抓')) + '）');
 
       const built = await post('/api/build', {
         messages,
@@ -273,8 +280,9 @@
 
       if (!built.ok) { setStatus(built.error || '生成失败', 'err'); return; }
 
-      render(built.result, mergeWarnings, fetched.errors || []);
-      setStatus('好了', 'ok');
+      render(built.result, mergeWarnings, fetched.errors || [], staleWarnings);
+      setStatus(staleWarnings.length ? '好了（部分用的是旧缓存）' : '好了',
+                staleWarnings.length ? 'warn' : 'ok');
     } catch (e) {
       setStatus('出错：' + e.message, 'err');
     } finally {
@@ -282,7 +290,7 @@
     }
   });
 
-  function render(res, mergeWarnings, fetchErrors) {
+  function render(res, mergeWarnings, fetchErrors, staleWarnings) {
     $('result').style.display = 'block';
     $('promptOut').value = res.prompt;
     updateCount();
@@ -337,7 +345,8 @@
     $('statsOut').textContent = '';
     $('statsOut').appendChild(table);
 
-    const warns = [...mergeWarnings, ...(res.warnings || []), ...fetchErrors.map((e) => e[0] + '：' + e[1])];
+    const warns = [...(staleWarnings || []), ...mergeWarnings, ...(res.warnings || []),
+                   ...fetchErrors.map((e) => e[0] + '：' + e[1])];
     $('warnings').textContent = warns.length ? '⚠ ' + warns.join(' / ') : '';
 
     // 默认回到提示词页
