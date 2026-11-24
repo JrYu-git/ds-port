@@ -1,30 +1,41 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
 
-set PYCMD=
-where py >nul 2>nul && set PYCMD=py
-if not defined PYCMD (
-  where python >nul 2>nul && set PYCMD=python
-)
+set "PYCMD="
+
+where py >nul 2>nul
+if %errorlevel%==0 set "PYCMD=py -3"
 
 if not defined PYCMD (
-  echo.
-  echo   [x] 没有找到 Python
-  echo.
-  echo   请先安装 Python 3.9 或更高版本：
-  echo   https://www.python.org/downloads/
-  echo.
-  echo   安装时记得勾选 "Add Python to PATH"
-  echo.
-  pause
-  exit /b 1
+  where python >nul 2>nul
+  if errorlevel 1 goto nopython
+  set "PYCMD=python"
 )
 
 echo.
-echo   ds-port 正在启动，浏览器会自动打开
-echo   用完关掉这个窗口就行
+echo   Starting ds-port ...
+echo   Your browser will open automatically.
+echo   Close this window to stop.
 echo.
 
 %PYCMD% server.py
-if errorlevel 1 pause
+
+if errorlevel 1 (
+  echo.
+  echo   [!] server exited with an error.
+  pause
+)
+exit /b 0
+
+:nopython
+echo.
+echo   [x] Python not found
+echo.
+echo   Install Python 3.9 or newer from:
+echo   https://www.python.org/downloads/
+echo.
+echo   During install, tick "Add Python to PATH".
+echo.
+pause
+exit /b 1
